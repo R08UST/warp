@@ -52,20 +52,36 @@ winget install -e --id Kitware.CMake
 # We use InnoSetup to build our release bundle installer.
 winget install -e --id JRSoftware.InnoSetup
 
-# If we don't see gcloud command, try adding the install location to the PATH.
-if (-not (Get-Command -Name gcloud -Type Application -ErrorAction SilentlyContinue)) {
-    $env:PATH += ";$env:LOCALAPPDATA\Google\Cloud SDK\google-cloud-sdk\bin"
+# protoc (protobuf compiler) is required by prost-build for several crates.
+# Mirrors the manual GitHub-release install used in script/linux/install_build_deps
+# so we get a modern protoc (>= 3.15, needed for proto3 'optional' fields).
+if (-not (Get-Command -Name protoc -Type Application -ErrorAction SilentlyContinue)) {
+    Write-Output 'Installing protoc...'
+    $protocVersion = '25.1'
+    $protocDir = "$env:LOCALAPPDATA\protoc"
+    $protocZip = "$env:TEMP\protoc-$protocVersion-win64.zip"
+    $protocUrl = "https://github.com/protocolbuffers/protobuf/releases/download/v$protocVersion/protoc-$protocVersion-win64.zip"
+
+    New-Item -ItemType Directory -Force -Path $protocDir | Out-Null
+    Invoke-WebRequest -Uri $protocUrl -OutFile $protocZip
+    Expand-Archive -Path $protocZip -DestinationPath $protocDir -Force
+    Remove-Item $protocZip
+
+    # Persist to user PATH so future shells pick it up.
+    $protocBin = Join-Path $protocDir 'bin'
+    $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
+    if (-not $userPath) { $userPath = '' }
+    if ($userPath -notlike "*$protocBin*") {
+        $newUserPath = if ($userPath) { "$userPath;$protocBin" } else { $protocBin }
+        [Environment]::SetEnvironmentVariable('PATH', $newUserPath, 'User')
+    }
+    # And make it available to the current session immediately.
+    $env:PATH = "$env:PATH;$protocBin"
+
+    Write-Output "Installed protoc $protocVersion to $protocDir"
 }
 
-# If we still don't see it, install it.
-if (-not (Get-Command -Name gcloud -Type Application -ErrorAction SilentlyContinue)) {
-    (New-Object Net.WebClient).DownloadFile('https://dl.google.com/dl/cloudsdk/channels/rapid/GoogleCloudSDKInstaller.exe', "$env:Temp\GoogleCloudSDKInstaller.exe")
-    Start-Process "$env:Temp\GoogleCloudSDKInstaller.exe" -Wait
-}
-
-[string]$identityToken = gcloud auth print-identity-token
-if ($identityToken.Trim().Length -eq 0) {
-    Write-Output 'gcloud CLI authentication missing.  Press enter to continue...'
-    Read-Host
-    gcloud auth login
-}
+Write-Output ''
+Write-Output 'Bootstrap complete. Build OpenWarp with:'
+Write-Output '    cargo run --bin warp-oss --features gui'
+Write-Output '    cargo run --release --bin warp-oss --features gui'
